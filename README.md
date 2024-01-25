@@ -34,6 +34,10 @@ Display of trading pairs in DEX UI
 
 ## Canisters
 
+- dfx: 0.15.3 (https://github.com/dfinity/sdk/releases/tag/0.15.3)
+    - moc: 0.10.3 
+- vessel: 0.7.0 (https://github.com/dfinity/vessel/releases/tag/v0.7.0)
+
 **Testnet**
 - Canister-id: pwokq-miaaa-aaaak-act6a-cai
 - Module hash: ca5aa27c134d03475ef1141e97adfe22b3f06bf425b138b2cf00891e313aaabe
@@ -44,4 +48,4 @@ Display of trading pairs in DEX UI
 
 ## Disclaimer
 
-Pair Score is an automatic evaluation mechanism of ICDex for trading pairs, which is based on the comprehensive evaluation of the number of sponsors, liquidity, volume, etc. It is for your reference only, and is not considered as investment advice.
+Pair Score is an automatic evaluation mechanism of DexAggregator for trading pairs, which is based on the comprehensive evaluation of the number of sponsors, liquidity, volume, etc. It is for your reference only, and is not considered as investment advice.
