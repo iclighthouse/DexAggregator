@@ -1,0 +1,34 @@
+{
+    "canisters": {
+      "DexAggregator": {
+        "main": "./src/DexAggregator.mo",
+        "type": "motoko"
+      },
+      "DexAggregatorMain": {
+        "main": "./src/DexAggregator.mo",
+        "type": "motoko"
+      },
+      "DexAggregatorTest": {
+        "main": "./src/DexAggregator.mo",
+        "type": "motoko"
+      }
+    },
+    "defaults": {
+      "build": {
+        "args": "--compacting-gc",
+        "packtool": "vessel sources"
+      }
+    },
+    "networks": {
+      "ic": {
+        "providers": ["https://ic0.app"],
+        "type": "persistent"
+      },
+      "local": {
+        "bind": "0.0.0.0:8000",
+        "type": "ephemeral"
+      }
+    },
+    "dfx": "0.15.3"
+  }
+  
