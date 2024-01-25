@@ -53,8 +53,8 @@ score1 (max 70)
 score2 (max 20)
 - SNS proposal sets Score +0 ~ 20
 score3
-- (token1_vol_usd / 10000 / max(years, 1)) ^ 0.5 / 2
-- (token1_liquidity_usd / 10000) ^ 0.5 * 2
+- (pair_vol_token1_usd / 10000 / max(years, 1)) ^ 0.5 / 2
+- (pair_liquidity_token1_usd / 10000) ^ 0.5 * 2
 STAGE2: upgrade score >= 60, 1 month; degrade score < 50, 3 months
 STAGE1: upgrade score >= 30; degrade score < 20, 3 months
 STAGE0: default
@@ -95,7 +95,7 @@ shared(installMsg) actor class DexAggregator() = this {
         SCORE_G3: Nat = 30; // 30
         SCORE_G4: Nat = 20; // 20
     };
-    private let version_: Text = "0.8.2";
+    private let version_: Text = "0.8.5";
     private let ic: IC.Self = actor("aaaaa-aa");
     private let usd_decimals: Nat = 18;
     private let icp_: Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
@@ -697,6 +697,9 @@ shared(installMsg) actor class DexAggregator() = this {
         };
     };
 
+    public query func version() : async Text{
+        return version_;
+    };
     public query func getConfig() : async T.Config{
         return setting;
     };

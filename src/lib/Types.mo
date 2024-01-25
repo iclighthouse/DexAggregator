@@ -127,17 +127,16 @@ module {
     };
     public type TrieList<K, V> = {data: [(K, V)]; total: Nat; totalPage: Nat; };
     public type Self = actor {
-        create : shared (_pair: PairRequest) -> async (canister: PairCanister, initialized: Bool);
         getDexList : shared query () -> async [(DexName, Principal)];
         getTokens : shared query (_dexName: ?DexName) -> async [TokenInfo];
         getCurrencies : shared query () -> async [TokenInfo];
-        getPairsByToken : shared query (_token: Principal, _dexName: ?DexName) -> async [(PairCanister, (PairInfo, Nat))];
-        getPairs : shared query (_dexName: ?DexName, _page: ?Nat, _size: ?Nat) -> async TrieList<PairCanister, (PairInfo, Nat)>;
+        getPairsByToken : shared query (_token: Principal, _dexName: ?DexName) -> async [(PairCanister, TradingPair)];
+        getPairs : shared query (_dexName: ?DexName, _page: ?Nat, _size: ?Nat) -> async TrieList<PairCanister, TradingPair>;
         getPairs2 : shared query (_dexName: ?DexName, _lr: ?Principal, _page: ?Nat, _size: ?Nat) -> async TrieList<PairCanister, PairResponse>;
-        route : shared query (_token0: Principal, _token1: Principal, _dexName: ?DexName) -> async [(PairCanister, (PairInfo, Nat))];
+        route : shared query (_token0: Principal, _token1: Principal, _dexName: ?DexName) -> async [(PairCanister, TradingPair)];
         putByDex : shared (_token0: TokenInfo, _token1: TokenInfo, _canisterId: Principal) -> async ();
         removeByDex : shared (_pairCanister: Principal) -> async ();
-        pushCompetitionByPair : shared (_round: Nat, _name: Text, _start: Time.Time, _end: Time.Time) -> async ();
+        // pushCompetitionByPair : shared (_round: Nat, _name: Text, _start: Time.Time, _end: Time.Time) -> async ();
         pushCompetitionByDex : shared (_id: ?Nat, _name: Text, _content: Text, _start: Time.Time, _end: Time.Time, pairs: [(DexName, Principal, {#token0; #token1})]) -> async Nat;
         verifyListingReferrer : shared (_referrer: Principal, _name: Text, _verified: Bool) -> async ();
         setListingReferrerByNft : shared (_name: Text, _nftId: Text) -> async ();
