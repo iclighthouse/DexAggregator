@@ -11,14 +11,14 @@ Pair scoring rule (pair_score = score1 + score2 + score3)
     - Verified ListingReferrer Propose: +15 per Sponsor
     - Sponsored (Sponsors >= 5): +10
 - score2 (max 20)
-    - Set a score through DAO proposal. Typically, this is scored as 0. Only trading pairs of well-known or special contributing projects will have a score set by the proposal.
+    - Set a score through DAO proposal. Typically, this is scored as 0. Only trading pairs of well-known or special contributing projects will have a score set by the proposal. For projects launched in SNS, it is recommended to set 5 to 20 points depending on the crowdsale capacity.
 - score3
     - (pair_vol_token1_usd / 10000 / max(years, 1)) ^ 0.5 / 2  +  (pair_liquidity_token1_usd / 10000) ^ 0.5 * 2
 
 Upgrade rules
 
 - A new trading pair defaults to STAGE0.
-- Upgrade from STAGE0 to STAGE1: pair_score >= 30.
+- Upgrade from STAGE0 to STAGE1: pair_score >= 25.
 - Upgrade from STAGE1 to STAGE2: pair_score >= 60, for at least one month.
 
 Degrade rules
