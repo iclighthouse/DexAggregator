@@ -95,7 +95,7 @@ shared(installMsg) actor class DexAggregator() = this {
         SCORE_G3: Nat = 30; // 30
         SCORE_G4: Nat = 20; // 20
     };
-    private let version_: Text = "0.8.5";
+    private let version_: Text = "0.8.6";
     private let ic: IC.Self = actor("aaaaa-aa");
     private let usd_decimals: Nat = 18;
     private let icp_: Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
@@ -644,6 +644,7 @@ shared(installMsg) actor class DexAggregator() = this {
         let pair = _adjustPair2(_pair);
         _putPair(?msg.caller, pair);
         await _updatePair(pair);
+        _setScore2(_pair.canisterId, _score);
     };
     public shared(msg) func remove(_pairCanister: Principal) : async (){
         assert(_onlyOwner(msg.caller));
