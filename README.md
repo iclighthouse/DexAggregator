@@ -43,8 +43,8 @@ Display of trading pairs in DEX UI
 **Testnet**
 
 - Canister-id: pwokq-miaaa-aaaak-act6a-cai
-- Module hash: ca5aa27c134d03475ef1141e97adfe22b3f06bf425b138b2cf00891e313aaabe
-- Version: 0.8.5
+- Module hash: 7d37f2066ad16c3918a73d712fc05326d19374d20237771a487ea1c0f81031a5
+- Version: 0.8.6
 - Build: {
     "args": "--compacting-gc"
 }
