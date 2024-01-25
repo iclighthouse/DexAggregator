@@ -26,7 +26,7 @@ import Nat32 "mo:base/Nat32";
 import Nat64 "mo:base/Nat64";
 import Option "mo:base/Option";
 import Principal "mo:base/Principal";
-import T "mo:icl/DexRouter";
+import T "lib/Types";
 import Text "mo:base/Text";
 import Time "mo:base/Time";
 import Tools "mo:icl/Tools";
@@ -46,17 +46,18 @@ import Error "mo:base/Error";
 
 /*
 Pair Score: 
-- (Not verified) ListingReferrer Propose: +10
-- Verified ListingReferrer Propose: +15
-- Sponsored (Sponsors >= 5): +20
-- TotalVol (token1 > 100000 usdt): +5
-- TotalVol (token1 > 1000000 usdt): +10
-- TotalVol (token1 > 10000000 usdt): +20
-- Liquidity (Orderbook pending orders) (token1 > 10000 usdt): +5
-- Liquidity (Orderbook pending orders) (token1 > 100000 usdt): +10
-- Liquidity (Orderbook pending orders) (token1 > 1000000 usdt): +20
-- Liquidity (Orderbook pending orders) (token1 > 10000000 usdt): +30
-ICDex: When the score >= 50, it is displayed in the list of ICDex UI trading pairs
+score1 (max 70)
+- (Not verified) ListingReferrer Propose: +10 / Sponsor
+- Verified ListingReferrer Propose: +15 / Sponsor
+- Sponsored (Sponsors >= 5): +10
+score2 (max 20)
+- SNS proposal sets Score +0 ~ 20
+score3
+- (token1_vol_usd / 10000 / max(years, 1)) ^ 0.5 / 2
+- (token1_liquidity_usd / 10000) ^ 0.5 * 2
+STAGE2: upgrade score >= 60, 1 month; degrade score < 50, 3 months
+STAGE1: upgrade score >= 30; degrade score < 20, 3 months
+STAGE0: default
 */
 shared(installMsg) actor class DexAggregator() = this {
     type Txid = T.Txid;  //Blob
@@ -70,9 +71,9 @@ shared(installMsg) actor class DexAggregator() = this {
     type ListingReferrer = T.ListingReferrer;
     type TxnStatus = T.TxnStatus;
     type TxnResult = T.TxnResult;
-    type PairCanisterId = T.SwapCanister;
+    type PairCanisterId = T.PairCanister;
     type PairRequest = T.PairRequest;
-    type SwapPair = T.SwapPair;
+    type PairInfo = T.PairInfo;
     type PairResponse = T.PairResponse;
     type TrieList<K, V> = T.TrieList<K, V>;
     type DexCompetition = T.DexCompetition;
@@ -81,28 +82,31 @@ shared(installMsg) actor class DexAggregator() = this {
     type TraderData = T.TraderData;
     type TraderDataResponse = T.TraderDataResponse;
     type FilledTrade = T.FilledTrade;
+    type MarketBoard = T.MarketBoard;
+    type TradingPair = T.TradingPair;
     type Timestamp = Nat; // seconds
 
     private stable var setting = {
         SYS_TOKEN: Principal = Principal.fromText("5573k-xaaaa-aaaak-aacnq-cai");
-        CREATION_FEE: Nat = 100*100000000; // token
-        ROUTING_FEE: Nat = 10000000; // token
-        DEFAULT_VOLATILITY_LIMIT: Nat = 10; //%
+        BLACKHOLE: Principal = Principal.fromText("7hdtw-jqaaa-aaaak-aaccq-cai");
+        ORACLE: Principal = Principal.fromText("pncff-zqaaa-aaaai-qnp3a-cai");
+        SCORE_G1: Nat = 60; // 60
+        SCORE_G2: Nat = 50; // 50
+        SCORE_G3: Nat = 30; // 30
+        SCORE_G4: Nat = 20; // 20
     };
-    private let version_: Text = "0.8.1";
-    private let swapCyclesInit: Nat = 1_000_000_000_000; 
+    private let version_: Text = "0.8.2";
     private let ic: IC.Self = actor("aaaaa-aa");
     private let usd_decimals: Nat = 18;
-    private let blackhole: Principal = Principal.fromText("7hdtw-jqaaa-aaaak-aaccq-cai");
     private let icp_: Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
-    private let oracle_: Principal = Principal.fromText("pncff-zqaaa-aaaai-qnp3a-cai");
     private stable var oracleData: ([ICOracle.DataResponse], Timestamp) = ([], 0); // ICP/USD sid=2
     // private stable var pause: Bool = false; 
-    private stable var owner: Principal = installMsg.caller;
+    // private stable var owner: Principal = installMsg.caller;
     private stable var sysToken: ICRC1.Self = actor(Principal.toText(setting.SYS_TOKEN));
     private stable var lastMonitorTime: Time.Time = 0;
     private stable var dexList =  List.nil<(DexName, Principal)>(); 
-    private stable var pairs: Trie.Trie<PairCanisterId, (pair: SwapPair, score: Nat)> = Trie.empty(); // **
+    private stable var pairs: Trie.Trie<PairCanisterId, (pair: PairInfo, score: Nat)> = Trie.empty(); // deprecated
+    private stable var tradingPairs: Trie.Trie<PairCanisterId, TradingPair> = Trie.empty(); 
     private stable var markets: Trie.Trie<Text, [PairCanisterId]> = Trie.empty(); // ICP USDT....
     private stable var pairSponsors: Trie.Trie<PairCanisterId, (sponsored: Bool, listingReferrers: [(ListingReferrer, Time.Time, ERC721.TokenIdentifier)])> = Trie.empty();
     private stable var pairLiquidity: Trie.Trie<PairCanisterId, (liquidity: ICDex.Liquidity, time: Time.Time)> = Trie.empty();
@@ -116,18 +120,14 @@ shared(installMsg) actor class DexAggregator() = this {
     private stable var wasm: [Nat8] = [];
     private stable var wasmVersion: Text = "";
     
-    //private stable var tokens: Trie.Trie<Principal, [SwapPair]> = Trie.empty(); // **
+    //private stable var tokens: Trie.Trie<Principal, [PairInfo]> = Trie.empty(); // **
     private stable var currencies =  List.nil<TokenInfo>(); 
-    // private stable var nonces: Trie.Trie<AccountId, Nonce> = Trie.empty(); 
     private stable var index: Nat = 0;
 
     private func keyp(t: Principal) : Trie.Key<Principal> { return { key = t; hash = Principal.hash(t) }; };
     private func keyb(t: Blob) : Trie.Key<Blob> { return { key = t; hash = Blob.hash(t) }; };
     private func keyt(t: Text) : Trie.Key<Text> { return { key = t; hash = Text.hash(t) }; };
     private func keyn(t: Nat) : Trie.Key<Nat> { return { key = t; hash = Tools.natHash(t) }; };
-    //private func keypair(t: SwapPair) : Trie.Key<SwapPair> { return { key = t; hash = pairHash(t)}; };
-    //private func pairHash(p: SwapPair): Nat32 { Principal.hash(p.token0.0) +% Principal.hash(p.token1.0) +% Principal.hash(p.canisterId) };
-    //private func pairEqual(x: SwapPair, y: SwapPair) : Bool { x.token0.0 == y.token0.0 and x.token1.0 == y.token1.0 and x.canisterId == y.canisterId };
     private func trieItems<K, V>(_trie: Trie.Trie<K,V>, _page: Nat, _size: Nat) : TrieList<K, V> {
         let length = Trie.size(_trie);
         if (_page < 1 or _size < 1){
@@ -155,7 +155,7 @@ shared(installMsg) actor class DexAggregator() = this {
     * Local Functions
     */
     private func _onlyOwner(_caller: Principal) : Bool { 
-        return _caller == owner;
+        return Principal.isController(_caller);
     };  // assert(_onlyOwner(msg.caller));
     // private func _notPaused() : Bool { 
     //     return not(pause);
@@ -164,7 +164,7 @@ shared(installMsg) actor class DexAggregator() = this {
         return Option.isSome(List.find(dexList, func (item:(DexName, Principal)):Bool{ item.1 == _caller }));
     };
     private func _onlyPair(_caller: Principal) : Bool { 
-        return Option.isSome(Trie.find(pairs, keyp(_caller), Principal.equal));
+        return Option.isSome(Trie.find(tradingPairs, keyp(_caller), Principal.equal));
     };
     private func _inDexList(_name: DexName) : Bool { 
         return Option.isSome(List.find(dexList, func (item:(DexName, Principal)):Bool{ item.0 == _name }));
@@ -234,44 +234,156 @@ shared(installMsg) actor class DexAggregator() = this {
     //         case(#err(e)){ return false; };
     //     };
     // };
-    private func _syncFee(_pair: SwapPair, _score: Nat) : async (){
-        if (_pair.dexName == "icswap" or _pair.dexName == "icdex"){
-                let swap: ICDex.Self = actor(Principal.toText(_pair.canisterId));
-                let feeRate = (await swap.feeStatus()).feeRate;
-                pairs := Trie.put(pairs, keyp(_pair.canisterId), Principal.equal, ({
-                    token0 = _pair.token0; 
-                    token1 = _pair.token1; 
-                    dexName = _pair.dexName; 
-                    canisterId = _pair.canisterId; 
-                    feeRate = feeRate; 
-                }, _score)).0;
-            }else if (_pair.dexName == "cyclesfinance"){
-                let swap: CF.Self = actor(Principal.toText(_pair.canisterId));
-                let feeRate = (await swap.feeStatus()).fee;
-                pairs := Trie.put(pairs, keyp(_pair.canisterId), Principal.equal, ({
-                    token0 = _pair.token0; 
-                    token1 = _pair.token1; 
-                    dexName = _pair.dexName; 
-                    canisterId = _pair.canisterId; 
-                    feeRate = feeRate; 
-                }, _score)).0;
+    private func _updatePair(_pair: PairInfo) : async (){
+        var feeRate: Float = 0;
+        if (_pair.dexName == "icdex"){
+            let pair: ICDex.Self = actor(Principal.toText(_pair.canisterId));
+            feeRate := (await pair.fee()).taker.buy;
+        }else if (_pair.dexName == "icswap"){
+            let pair: ICDex.Self = actor(Principal.toText(_pair.canisterId));
+            feeRate := (await pair.feeStatus()).feeRate;
+        }else if (_pair.dexName == "cyclesfinance"){
+            let pair: CF.Self = actor(Principal.toText(_pair.canisterId));
+            feeRate := (await pair.feeStatus()).fee;
+        }else{
+            // ELSE DEX
+        };
+        switch(Trie.get(tradingPairs, keyp(_pair.canisterId), Principal.equal)){
+            case(?tradingPair){
+                tradingPairs := Trie.put(tradingPairs, keyp(_pair.canisterId), Principal.equal, {
+                    pair = {
+                        token0 = _pair.token0; 
+                        token1 = _pair.token1; 
+                        dexName = _pair.dexName; 
+                        canisterId = _pair.canisterId; 
+                        feeRate = feeRate; 
+                    };
+                    marketBoard = tradingPair.marketBoard;
+                    score1 = tradingPair.score1;
+                    score2 = tradingPair.score2;
+                    score3 = tradingPair.score3;
+                    startingOverG1 = tradingPair.startingOverG1;
+                    startingBelowG2 = tradingPair.startingBelowG2;
+                    startingBelowG4 = tradingPair.startingBelowG4;
+                    createdTime = tradingPair.createdTime;
+                    updatedTime = tradingPair.updatedTime;
+                }).0;
             };
-    };
-
-    private func _addScore(_pair: PairCanisterId, _add: Nat) : (){
-        switch(Trie.get(pairs, keyp(_pair), Principal.equal)){
-            case(?(pair)){
-                pairs := Trie.put(pairs, keyp(_pair), Principal.equal, (pair.0, pair.1 + _add)).0;
-            };
-            case(_){ };
+            case(_){};
         };
     };
-    private func _subScore(_pair: PairCanisterId, _sub: Nat) : (){
-        switch(Trie.get(pairs, keyp(_pair), Principal.equal)){
-            case(?(pair)){
-                pairs := Trie.put(pairs, keyp(_pair), Principal.equal, (pair.0, Nat.sub(Nat.max(pair.1, _sub), _sub))).0;
+
+    private func _updateMarketBoard(_pair: TradingPair) : TradingPair{
+        let score = _pair.score1 + _pair.score2 + _pair.score3;
+        let t3months = 90 * 24 * 3600;
+        let t1months = 30 * 24 * 3600;
+        var startingOverG1 = _pair.startingOverG1;
+        var startingBelowG2 = _pair.startingBelowG2;
+        var startingBelowG4 = _pair.startingBelowG4;
+        var marketBoard = _pair.marketBoard;
+        if (marketBoard == #STAGE0 and score >= setting.SCORE_G3){
+            marketBoard := #STAGE1;
+        }else if (marketBoard == #STAGE1 and score < setting.SCORE_G4){
+            if (Option.isNull(startingBelowG4)){
+                startingBelowG4 := ?_now();
+            }else if (_now() > Option.get(startingBelowG4, 0) + t3months){
+                marketBoard := #STAGE0;
+                startingBelowG4 := null;
             };
-            case(_){ };
+        }else if (marketBoard == #STAGE1 and score >= setting.SCORE_G1){
+            if (Option.isNull(startingOverG1)){
+                startingOverG1 := ?_now();
+            }else if (_now() > Option.get(startingOverG1, 0) + t1months){
+                marketBoard := #STAGE2;
+                startingOverG1 := null;
+            };
+        }else if (marketBoard == #STAGE1){
+            startingOverG1 := null;
+            startingBelowG4 := null;
+        }else if (marketBoard == #STAGE2 and score < setting.SCORE_G2){
+            if (Option.isNull(startingBelowG2)){
+                startingBelowG2 := ?_now();
+            }else if (_now() > Option.get(startingBelowG2, 0) + t3months){
+                marketBoard := #STAGE1;
+                startingBelowG2 := null;
+            };
+        }else if (marketBoard == #STAGE2){
+            startingBelowG2 := null;
+        };
+        return {
+            pair = _pair.pair;
+            marketBoard = marketBoard;
+            score1 = _pair.score1;
+            score2 = _pair.score2;
+            score3 = _pair.score3;
+            startingOverG1 = startingOverG1;
+            startingBelowG2 = startingBelowG2;
+            startingBelowG4 = startingBelowG4;
+            createdTime = _pair.createdTime;
+            updatedTime = _now();
+        };
+    };
+    private func _addScore1(_pair: PairCanisterId, _add: Nat) : (){
+        switch(Trie.get(tradingPairs, keyp(_pair), Principal.equal)){
+            case(?(pair)){
+                tradingPairs := Trie.put(tradingPairs, keyp(_pair), Principal.equal, _updateMarketBoard({
+                    pair = pair.pair;
+                    marketBoard = pair.marketBoard;
+                    score1 = Nat.min(pair.score1 + _add, 70);
+                    score2 = pair.score2;
+                    score3 = pair.score3;
+                    startingOverG1 = pair.startingOverG1;
+                    startingBelowG2 = pair.startingBelowG2;
+                    startingBelowG4 = pair.startingBelowG4;
+                    createdTime = pair.createdTime;
+                    updatedTime = pair.updatedTime;
+                })).0;
+            };
+            case(_){};
+        };
+    };
+    private func _setScore2(_pair: PairCanisterId, _set: Nat) : (){
+        switch(Trie.get(tradingPairs, keyp(_pair), Principal.equal)){
+            case(?(pair)){
+                tradingPairs := Trie.put(tradingPairs, keyp(_pair), Principal.equal, _updateMarketBoard({
+                    pair = pair.pair;
+                    marketBoard = pair.marketBoard;
+                    score1 = pair.score1;
+                    score2 = Nat.min(_set, 20);
+                    score3 = pair.score3;
+                    startingOverG1 = pair.startingOverG1;
+                    startingBelowG2 = pair.startingBelowG2;
+                    startingBelowG4 = pair.startingBelowG4;
+                    createdTime = pair.createdTime;
+                    updatedTime = pair.updatedTime;
+                })).0;
+            };
+            case(_){};
+        };
+    };
+    private func _calcuScore3(createTs: Timestamp, volUsd: Nat, liquidityUsd: Nat): Nat{
+        let durationYears = Nat.sub(_now(), createTs) / 365 / 24 / 3600;
+        // (vol_usd / 10000 / max(years, 1)) ^ 0.5 / 2    +   (liquidity_usd / 10000) ^ 0.5 * 2
+        return _floatToNat(_natToFloat(volUsd / 10_000 / Nat.max(durationYears, 1)) ** 0.5) / 2 +
+        _floatToNat(_natToFloat(liquidityUsd / 10_000) ** 0.5) * 2;
+    };
+    private func _setScore3(_pair: PairCanisterId, _volUsd: Nat, _liquidityUsd: Nat) : (){
+        switch(Trie.get(tradingPairs, keyp(_pair), Principal.equal)){
+            case(?(pair)){
+                tradingPairs := Trie.put(tradingPairs, keyp(_pair), Principal.equal, _updateMarketBoard({
+                    pair = pair.pair;
+                    marketBoard = pair.marketBoard;
+                    score1 = pair.score1;
+                    score2 = pair.score2;
+                    score3 = _calcuScore3(pair.createdTime, _volUsd, _liquidityUsd);
+                    startingOverG1 = pair.startingOverG1;
+                    startingBelowG2 = pair.startingBelowG2;
+                    startingBelowG4 = pair.startingBelowG4;
+                    createdTime = pair.createdTime;
+                    updatedTime = pair.updatedTime;
+                })).0;
+            };
+            case(_){};
         };
     };
     private func _adjustPair(_pair: PairRequest) : (pair: PairRequest){
@@ -288,7 +400,7 @@ shared(installMsg) actor class DexAggregator() = this {
             return {token0 = _pair.token1; token1 = _pair.token0; dexName = _pair.dexName; };
         };
     };
-    private func _adjustPair2(_pair: SwapPair) : (pair: SwapPair){
+    private func _adjustPair2(_pair: PairInfo) : (pair: PairInfo){
         var value0: Nat64 = 0;
         var value1: Nat64 = 1;
         if (_pair.dexName == "icswap"){
@@ -305,54 +417,60 @@ shared(installMsg) actor class DexAggregator() = this {
     private func _inCurrencies(_token: Principal) : Bool{
         return Option.isSome(List.find(currencies, func (t: TokenInfo): Bool{ t.0 == _token }));
     };
-    // private func _inPairs(_pair: SwapPair) : Bool{
-    //     return Option.isSome(Trie.find(pairs, keyp(_pair.canisterId), Principal.equal));
-    // };
-    // private func _inPairs2(_token0: Principal, _token1: Principal, _dexName: DexName) : Bool{
-    //     let temp = Trie.filter(pairs, func (k: PairCanisterId, v: (SwapPair, Nat)): Bool{ v.0.dexName == _dexName and v.0.token0.0 == _token0 and v.0.token1.0 == _token1 });
-    //     return Trie.size(temp) > 0;
-    // };
-    private func _getPairsByToken(_mainToken: Principal, _dexName: ?DexName) : [(PairCanisterId, (SwapPair, Nat))]{
-        var trie = pairs;
+    private func _getPairsByToken(_mainToken: Principal, _dexName: ?DexName) : [(PairCanisterId, TradingPair)]{
+        var trie = tradingPairs;
         if (Option.isSome(_dexName)){
-            trie := Trie.filter(trie, func (k:PairCanisterId, v:(SwapPair, Nat)):Bool{ v.0.dexName == Option.get(_dexName, ""); });
+            trie := Trie.filter(trie, func (k:PairCanisterId, v:TradingPair):Bool{ v.pair.dexName == Option.get(_dexName, ""); });
         };
-        trie := Trie.filter(trie, func (k:PairCanisterId, v:(SwapPair, Nat)):Bool{ v.0.token0.0 == _mainToken or v.0.token1.0 == _mainToken; });
-        return Trie.toArray<PairCanisterId, (SwapPair, Nat), (PairCanisterId, (SwapPair, Nat))>(trie, func (k:PairCanisterId, v:(SwapPair, Nat)):
-        (PairCanisterId, (SwapPair, Nat)){
-            return (k, v);
-        });
+        trie := Trie.filter(trie, func (k:PairCanisterId, v:TradingPair):Bool{ v.pair.token0.0 == _mainToken or v.pair.token1.0 == _mainToken; });
+        return Iter.toArray(Trie.iter(trie));
     };
-    private func _route(_token0: Principal, _token1: Principal, _dexName: ?DexName) : [(PairCanisterId, (SwapPair, Nat))]{
-        var trie = pairs;
+    private func _route(_token0: Principal, _token1: Principal, _dexName: ?DexName) : [(PairCanisterId, TradingPair)]{
+        var trie = tradingPairs;
         if (Option.isSome(_dexName)){
-            trie := Trie.filter(trie, func (k:PairCanisterId, v:(SwapPair, Nat)):Bool{ v.0.dexName == Option.get(_dexName, ""); });
+            trie := Trie.filter(trie, func (k:PairCanisterId, v:TradingPair):Bool{ v.pair.dexName == Option.get(_dexName, ""); });
         };
-        trie := Trie.filter(trie, func (k: PairCanisterId, v: (SwapPair, Nat)): Bool{ 
-            (v.0.token0.0 == _token0 and v.0.token1.0 == _token1) or (v.0.token1.0 == _token0 and v.0.token0.0 == _token1)
+        trie := Trie.filter(trie, func (k: PairCanisterId, v: TradingPair): Bool{ 
+            (v.pair.token0.0 == _token0 and v.pair.token1.0 == _token1) or (v.pair.token1.0 == _token0 and v.pair.token0.0 == _token1)
         });
-        return Trie.toArray<PairCanisterId, (SwapPair, Nat), (PairCanisterId, (SwapPair, Nat))>(trie, func (k: PairCanisterId, v: (SwapPair, Nat)): (PairCanisterId, (SwapPair, Nat)){
-            return (k, v);
-        });
+        return Iter.toArray(Trie.iter(trie));
     };
-    // private func _putToken(_mainToken: Principal, _pair: SwapPair) : (){
-    //     switch(Trie.get(tokens, keyp(_mainToken), Principal.equal)){
-    //         case(?(tokenPairs)){ _addPairToToken(_mainToken, _pair); };
-    //         case(_){
-    //             tokens := Trie.put(tokens, keyp(_mainToken), Principal.equal, [_pair]).0;
-    //         };
-    //     };
-    // };
-    // private func _addPairToToken(_mainToken: Principal, _addPair: SwapPair) : (){
-    //     switch(Trie.get(tokens, keyp(_mainToken), Principal.equal)){
-    //         case(?(tokenPairs)){
-    //             let tempPairs = Array.filter(tokenPairs, func (pair:SwapPair):Bool{ pair.canisterId != _addPair.canisterId });
-    //             tokens := Trie.put(tokens, keyp(_mainToken), Principal.equal, Tools.arrayAppend(tempPairs, [_addPair])).0;
-    //         };
-    //         case(_){};
-    //     };
-    // };
-
+    private func _putPair(caller: ?Principal, pair: PairInfo): (){
+        switch(Trie.get(tradingPairs, keyp(pair.canisterId), Principal.equal)){
+            case(?(tradingPair)){
+                if (Option.isNull(caller) or tradingPair.pair.dexName == _getDexName(Option.get(caller, Principal.fromActor(this)))){
+                    tradingPairs := Trie.put(tradingPairs, keyp(pair.canisterId), Principal.equal, {
+                        pair = pair;
+                        marketBoard = tradingPair.marketBoard;
+                        score1 = tradingPair.score1;
+                        score2 = tradingPair.score2;
+                        score3 = tradingPair.score3;
+                        startingOverG1 = tradingPair.startingOverG1;
+                        startingBelowG2 = tradingPair.startingBelowG2;
+                        startingBelowG4 = tradingPair.startingBelowG4;
+                        createdTime = tradingPair.createdTime;
+                        updatedTime = _now();
+                    }).0;
+                    _autoPutMarket(pair);
+                };
+            };
+            case(_){
+                tradingPairs := Trie.put(tradingPairs, keyp(pair.canisterId), Principal.equal, {
+                    pair = pair;
+                    marketBoard = #STAGE0;
+                    score1 = 0;
+                    score2 = 0;
+                    score3 = 0;
+                    startingOverG1 = null;
+                    startingBelowG2 = null;
+                    startingBelowG4 = null;
+                    createdTime = _now();
+                    updatedTime = _now();
+                }).0;
+                _autoPutMarket(pair);
+            };
+        };
+    };
     private func _putMarket(_name: Text, _canisterId: PairCanisterId): (){
         switch(Trie.get(markets, keyt(_name), Text.equal)){
             case(?(items)){
@@ -364,7 +482,7 @@ shared(installMsg) actor class DexAggregator() = this {
             };
         };
     };
-    private func _autoPutMarket(_pair: SwapPair): (){
+    private func _autoPutMarket(_pair: PairInfo): (){
         _putMarket(_pair.token1.1, _pair.canisterId);
     };
     private func _removePairFromMarket(_name: Text, _canisterId: PairCanisterId): (){
@@ -382,11 +500,11 @@ shared(installMsg) actor class DexAggregator() = this {
             markets := Trie.put(markets, keyt(market), Text.equal, canisterIds).0;
         };
     };
-    private func _getMarket(_name: Text): [(pair: SwapPair, score: Nat)]{
+    private func _getMarket(_name: Text): [TradingPair]{
         switch(Trie.get(markets, keyt(_name), Text.equal)){
             case(?(items)){
-                return Array.mapFilter(items, func (t: PairCanisterId): ?(SwapPair, Nat){
-                    Trie.get(pairs, keyp(t), Principal.equal);
+                return Array.mapFilter(items, func (t: PairCanisterId): ?TradingPair{
+                    Trie.get(tradingPairs, keyp(t), Principal.equal);
                 });
             };
             case(_){
@@ -395,7 +513,7 @@ shared(installMsg) actor class DexAggregator() = this {
         };
     };
     private func _fetchOracleFeed(): async* (){
-        let oralce: ICOracle.Self = actor(Principal.toText(oracle_));
+        let oralce: ICOracle.Self = actor(Principal.toText(setting.ORACLE));
         let res = await oralce.latest(#Crypto);
         oracleData := (res, _now());
     };
@@ -404,8 +522,8 @@ shared(installMsg) actor class DexAggregator() = this {
         var unit: Nat = 1;
         if (_token == icp_){
             sid := 2;
-            unit := 10000000000; // USDT_Decimals 18 - ICP_Decimals 8
-        }else{
+            unit := 10_000_000_000; // USDT_Decimals 18 - ICP_Decimals 8
+        }else/* if (_token == usdt_)*/{
             return 1; // USDT
         };
         for(item in oracleData.0.vals()){
@@ -419,38 +537,35 @@ shared(installMsg) actor class DexAggregator() = this {
     /* =====================
       Pair List and Router
     ====================== */
-    // public query func getPair(_pair: PairRequest) : async (pair: PairRequest){
-    //     return _adjustPair(_pair);
-    // };
     public query func getTokens(_dexName: ?DexName) : async [TokenInfo]{
-        var trie = pairs;
+        var trie = tradingPairs;
         if (Option.isSome(_dexName)){
-            trie := Trie.filter(trie, func (k:PairCanisterId, v:(SwapPair, Nat)):Bool{ v.0.dexName == Option.get(_dexName, ""); });
+            trie := Trie.filter(trie, func (k:PairCanisterId, v:TradingPair):Bool{ v.pair.dexName == Option.get(_dexName, ""); });
         };
         var res: [TokenInfo] = [];
-        for ((canister, (pair,score)) in Trie.iter(trie)){
-            if (Option.isNull(Array.find(res, func (t:TokenInfo):Bool{ t.0 == pair.token0.0 }))){
-                res := Tools.arrayAppend(res, [pair.token0]);
+        for ((canister, pair) in Trie.iter(trie)){
+            if (Option.isNull(Array.find(res, func (t:TokenInfo):Bool{ t.0 == pair.pair.token0.0 }))){
+                res := Tools.arrayAppend(res, [pair.pair.token0]);
             };
-            if (Option.isNull(Array.find(res, func (t:TokenInfo):Bool{ t.0 == pair.token1.0 }))){
-                res := Tools.arrayAppend(res, [pair.token1]);
+            if (Option.isNull(Array.find(res, func (t:TokenInfo):Bool{ t.0 == pair.pair.token1.0 }))){
+                res := Tools.arrayAppend(res, [pair.pair.token1]);
             };
         };
         return res;
     };
-    public query func getPairs(_dexName: ?DexName, _page: ?Nat, _size: ?Nat) : async TrieList<PairCanisterId, (SwapPair, Nat)>{
-        var trie = pairs;
+    public query func getPairs(_dexName: ?DexName, _page: ?Nat, _size: ?Nat) : async TrieList<PairCanisterId, TradingPair>{
+        var trie = tradingPairs;
         let page = Option.get(_page, 1);
         let size = Option.get(_size, 100);
         if (Option.isSome(_dexName)){
-            trie := Trie.filter(pairs, func (k:PairCanisterId, v:(SwapPair, Nat)):Bool{ v.0.dexName == Option.get(_dexName, ""); });
+            trie := Trie.filter(trie, func (k:PairCanisterId, v:TradingPair):Bool{ v.pair.dexName == Option.get(_dexName, ""); });
         };
         return trieItems(trie, page, size);
     };
-    public query func getPairsByToken(_token: Principal, _dexName: ?DexName) : async [(PairCanisterId, (SwapPair, Nat))]{
+    public query func getPairsByToken(_token: Principal, _dexName: ?DexName) : async [(PairCanisterId, TradingPair)]{
         return _getPairsByToken(_token, _dexName);
     };
-    public query func route(_token0: Principal, _token1: Principal, _dexName: ?DexName) : async [(PairCanisterId, (SwapPair, Nat))]{
+    public query func route(_token0: Principal, _token1: Principal, _dexName: ?DexName) : async [(PairCanisterId, TradingPair)]{
         return _route(_token0, _token1, _dexName);
     };
     public shared(msg) func putByDex(_token0: TokenInfo, _token1: TokenInfo, _canisterId: Principal) : async (){
@@ -462,27 +577,15 @@ shared(installMsg) actor class DexAggregator() = this {
             canisterId = _canisterId;
             feeRate = 0.0; 
         });
-        switch(Trie.get(pairs, keyp(pair.canisterId), Principal.equal)){
-            case(?(pair_, score_)){
-                if (pair_.dexName == _getDexName(msg.caller)){
-                    pairs := Trie.put(pairs, keyp(pair.canisterId), Principal.equal, (pair, score_)).0;
-                    _autoPutMarket(pair);
-                    await _syncFee(pair, score_);
-                };
-            };
-            case(_){
-                pairs := Trie.put(pairs, keyp(pair.canisterId), Principal.equal, (pair, 0)).0;
-                _autoPutMarket(pair);
-                await _syncFee(pair, 0);
-            };
-        };
+        _putPair(?msg.caller, pair);
+        await _updatePair(pair);
     };
     public shared(msg) func removeByDex(_pairCanister: Principal) : async (){
         assert(_onlyDexList(msg.caller));
-        switch(Trie.get(pairs, keyp(_pairCanister), Principal.equal)){
+        switch(Trie.get(tradingPairs, keyp(_pairCanister), Principal.equal)){
             case(?(pair)){
-                if (pair.0.dexName == _getDexName(msg.caller)){
-                    pairs := Trie.filter(pairs, func (k: PairCanisterId, v: (SwapPair, Nat)): Bool{ 
+                if (pair.pair.dexName == _getDexName(msg.caller)){
+                    tradingPairs := Trie.filter(tradingPairs, func (k: PairCanisterId, v: TradingPair): Bool{ 
                         _pairCanister != k;
                     });
                     _removePairFromAllMarkets(_pairCanister);
@@ -502,16 +605,16 @@ shared(installMsg) actor class DexAggregator() = this {
     public query func getCurrencies() : async [TokenInfo]{
         return List.toArray(currencies);
     };
-    public query func getPairsByMarket(_market: Text, _dexName: ?DexName, _page: ?Nat, _size: ?Nat): async TrieList<PairCanisterId, (SwapPair, Nat)>{
+    public query func getPairsByMarket(_market: Text, _dexName: ?DexName, _page: ?Nat, _size: ?Nat): async TrieList<PairCanisterId, TradingPair>{
         var marketPairs = _getMarket(_market);
         let page = Option.get(_page, 1);
         let size = Option.get(_size, 100);
         assert(page >= 1 and size >= 1);
         if (Option.isSome(_dexName)){
-            marketPairs := Array.filter(marketPairs, func (t: (SwapPair, Nat)): Bool{ t.0.dexName == Option.get(_dexName, ""); });
+            marketPairs := Array.filter(marketPairs, func (t: TradingPair): Bool{ t.pair.dexName == Option.get(_dexName, ""); });
         };
-        let data = Array.map<(SwapPair, Nat), (PairCanisterId, (SwapPair, Nat))>(marketPairs, func (t: (SwapPair, Nat)): (PairCanisterId, (SwapPair, Nat)){
-            (t.0.canisterId, t)
+        let data = Array.map<TradingPair, (PairCanisterId, TradingPair)>(marketPairs, func (t: TradingPair): (PairCanisterId, TradingPair){
+            (t.pair.canisterId, t)
         });
         let length = Array.size(data);
         let offset = Nat.sub(page, 1) * size;
@@ -531,33 +634,27 @@ shared(installMsg) actor class DexAggregator() = this {
     ====================== */
     public shared(msg) func sync() : async (){ // sync fee
         assert(_onlyOwner(msg.caller));
-        for ((canister, (pair,score)) in Trie.iter(pairs)){
-            let r = await _syncFee(pair, score);
+        for ((canister, pair) in Trie.iter(tradingPairs)){
+            let r = await _updatePair(pair.pair);
         };
     };
     //'(record{token0=record{principal "f2r76-wqaaa-aaaak-adpzq-cai"; "ITest"; variant{icrc1}}; token1=record{principal "f5qzk-3iaaa-aaaak-adpza-cai"; "DTest"; variant{drc20}}; dexName="icdex"; canisterId=principal "dklbo-qyaaa-aaaak-adqjq-cai"; feeRate=0.005}, 1)'
-    public shared(msg) func put(_pair: SwapPair, _score: Nat) : async (){
+    public shared(msg) func put(_pair: PairInfo, _score: Nat) : async (){
         assert(_onlyOwner(msg.caller));
         let pair = _adjustPair2(_pair);
-        pairs := Trie.put(pairs, keyp(pair.canisterId), Principal.equal, (pair, _score)).0;
-        _autoPutMarket(pair);
-        await _syncFee(pair, _score);
+        _putPair(?msg.caller, pair);
+        await _updatePair(pair);
     };
     public shared(msg) func remove(_pairCanister: Principal) : async (){
         assert(_onlyOwner(msg.caller));
-        pairs := Trie.filter(pairs, func (k: PairCanisterId, v: (SwapPair, Nat)): Bool{ 
+        tradingPairs := Trie.filter(tradingPairs, func (k: PairCanisterId, v: TradingPair): Bool{ 
             _pairCanister != k;
         });
         _removePairFromAllMarkets(_pairCanister);
     };
     public shared(msg) func setScore(_pairId: Principal, _score: Nat) : async (){
         assert(_onlyOwner(msg.caller));
-        switch(Trie.get(pairs, keyp(_pairId), Principal.equal)){
-            case(?(pair, score)){
-                pairs := Trie.put(pairs, keyp(_pairId), Principal.equal, (pair, _score)).0;
-            };
-            case(_){};
-        };
+        _setScore2(_pairId, _score);
     };
     public shared(msg) func putCurrency(_cur: TokenInfo) : async (){
         assert(_onlyOwner(msg.caller));
@@ -580,6 +677,14 @@ shared(installMsg) actor class DexAggregator() = this {
         dexList := List.filter(dexList, func(t: (DexName, Principal)):Bool{ t.1 != _canisterId });
     };
 
+    public shared(msg) func autoPutPairToMarket(_pairCanisterId: PairCanisterId) : async (){
+        switch(Trie.get(tradingPairs, keyp(_pairCanisterId), Principal.equal)){
+            case(?(tradingPair)){
+                _autoPutMarket(tradingPair.pair);
+            };
+            case(_){};
+        };
+    };
     public shared(msg) func putPairToMarket(_market: Text, _pairCanisterId: PairCanisterId) : async (){
         assert(_onlyOwner(msg.caller));
         _putMarket(_market, _pairCanisterId);
@@ -598,22 +703,17 @@ shared(installMsg) actor class DexAggregator() = this {
     public shared(msg) func config(config: T.ConfigRequest) : async Bool{ 
         assert(_onlyOwner(msg.caller));
         setting := {
-            SYS_TOKEN: Principal = setting.SYS_TOKEN;
-            CREATION_FEE: Nat = Option.get(config.CREATION_FEE, setting.CREATION_FEE);
-            ROUTING_FEE: Nat = Option.get(config.ROUTING_FEE, setting.ROUTING_FEE);
-            DEFAULT_VOLATILITY_LIMIT: Nat = Option.get(config.DEFAULT_VOLATILITY_LIMIT, setting.DEFAULT_VOLATILITY_LIMIT);
+            SYS_TOKEN: Principal = Option.get(config.SYS_TOKEN, setting.SYS_TOKEN);
+            BLACKHOLE: Principal = Option.get(config.BLACKHOLE, setting.BLACKHOLE);
+            ORACLE: Principal = Option.get(config.ORACLE, setting.ORACLE);
+            SCORE_G1: Nat = Option.get(config.SCORE_G1, setting.SCORE_G1);
+            SCORE_G2: Nat = Option.get(config.SCORE_G2, setting.SCORE_G2);
+            SCORE_G3: Nat = Option.get(config.SCORE_G3, setting.SCORE_G3);
+            SCORE_G4: Nat = Option.get(config.SCORE_G4, setting.SCORE_G4);
         };
         return true;
     };
 
-    public query func getOwner() : async Principal{  
-        return owner;
-    };
-    public shared(msg) func changeOwner(_newOwner: Principal) : async Bool{ 
-        assert(_onlyOwner(msg.caller));
-        owner := _newOwner;
-        return true;
-    };
     public shared(msg) func sys_withdraw(_token: Principal, _tokenStd: TokenStd, _to: Principal, _value: Nat) : async (){ 
         assert(_onlyOwner(msg.caller));
         let account = Tools.principalToAccountBlob(_to, null);
@@ -650,10 +750,16 @@ shared(installMsg) actor class DexAggregator() = this {
     };
     public shared(msg) func sys_burn(_value: Nat) : async (){
         assert(_onlyOwner(msg.caller));
-        let account = Tools.principalToAccountBlob(Principal.fromActor(this), null);
-        let address = Tools.principalToAccountHex(Principal.fromActor(this), null);
-        let icl2: ICTokens.Self = actor("5573k-xaaaa-aaaak-aacnq-cai");
-        let f = await icl2.ictokens_burn(_value, null,null,null);
+        let token: ICRC1.Self = actor(Principal.toText(setting.SYS_TOKEN));
+        let args : ICRC1.TransferArgs = {
+            memo = null;
+            amount = _value;
+            fee = null;
+            from_subaccount = null;
+            to = {owner = setting.BLACKHOLE; subaccount = null};
+            created_at_time = null;
+        };
+        let res = await token.icrc1_transfer(args);
     };
 
     /* =====================
@@ -701,11 +807,11 @@ shared(installMsg) actor class DexAggregator() = this {
                     if (_onlyReferrer(_referrer)) { 
                         referrers := Tools.arrayAppend(referrers, [(referrer, Time.now(), _nftId)]);
                         referrerCount += 1;
-                        if (referrerCount > count) { _addScore(_pair, 10);};
+                        if (referrerCount > count) { _addScore1(_pair, 10);};
                     };
                     if (_onlyVerifiedReferrer(_referrer)) { 
                         verifiedCount += 1; 
-                        if (referrerCount > count) { _addScore(_pair, 5);}; // 10 + 5
+                        if (referrerCount > count) { _addScore1(_pair, 5);}; // 10 + 5
                     };
                 };
                 case(_){ };
@@ -713,7 +819,7 @@ shared(installMsg) actor class DexAggregator() = this {
         };
         if (not(sponsored) and referrerCount >= 5){
             sponsored := true;
-            _addScore(_pair, 20);
+            _addScore1(_pair, 10);
         };
         return (sponsored, referrers);
     };
@@ -729,9 +835,9 @@ shared(installMsg) actor class DexAggregator() = this {
     };
     private func _updateLiquidity() : async* (){
         var i : Nat = 0;
-        for ((k,v) in Trie.iter(pairs)){
+        for ((k,v) in Trie.iter(tradingPairs)){
             var enUpdate : Bool = false;
-            switch(Trie.get(pairLiquidity, keyp(k), Principal.equal)){
+            switch(Trie.get(pairLiquidity2, keyp(k), Principal.equal)){
                 case(?(liquidity)){
                     if (Time.now() > liquidity.1 + 3600 * 1000000000){ enUpdate := true; };
                 };
@@ -739,46 +845,24 @@ shared(installMsg) actor class DexAggregator() = this {
             };
             if (enUpdate and i < 50){
                 i += 1;
-                if (v.0.dexName == "cyclesfinance" or v.0.dexName == "icswap" or v.0.dexName == "icdex"){
+                if (v.pair.dexName == "cyclesfinance" or v.pair.dexName == "icswap" or v.pair.dexName == "icdex"){
                     let mkt: ICDex.Self = actor(Principal.toText(k));
-                    try{ 
-                        var preVol: Nat = 0;
-                        var preLiquidity: Nat = 0;
-                        switch(Trie.get(pairLiquidity2, keyp(k), Principal.equal)){
-                            case(?(l, t)){ 
-                                preVol := l.vol.value1 * _getPrice(v.0.token1.0); 
-                                preLiquidity := l.token1 * _getPrice(v.0.token1.0); 
-                            };
-                            case(_){};
-                        };
+                    try{
                         let liquidity2 = await mkt.liquidity2(null);
                         pairLiquidity2 := Trie.put(pairLiquidity2, keyp(k), Principal.equal, (liquidity2, Time.now())).0;
-                        let postVol = liquidity2.vol.value1 * _getPrice(v.0.token1.0);
-                        let postLiquidity = liquidity2.token1 * _getPrice(v.0.token1.0);
-                        let usd_t0: Nat = 10_000 * (10**usd_decimals);
-                        let usd_t1: Nat = 100_000 * (10**usd_decimals);
-                        let usd_t2: Nat = 1_000_000 * (10**usd_decimals);
-                        let usd_t3: Nat = 10_000_000 * (10**usd_decimals);
-                        if (preVol < usd_t1 and postVol >= usd_t1){ _addScore(k, 5) };
-                        if (preVol < usd_t2 and postVol >= usd_t2){ _addScore(k, 10) };
-                        if (preVol < usd_t3 and postVol >= usd_t3){ _addScore(k, 20) };
-                        if (preLiquidity < usd_t0 and postLiquidity >= usd_t0){ _addScore(k, 5) };
-                        if (preLiquidity < usd_t1 and postLiquidity >= usd_t1){ _addScore(k, 10) };
-                        if (preLiquidity < usd_t2 and postLiquidity >= usd_t2){ _addScore(k, 20) };
-                        if (preLiquidity < usd_t3 and postLiquidity >= usd_t3){ _addScore(k, 30) };
-                        if (preLiquidity >= usd_t0 and postLiquidity < usd_t0){ _subScore(k, 5) };
-                        if (preLiquidity >= usd_t1 and postLiquidity < usd_t1){ _subScore(k, 10) };
-                        if (preLiquidity >= usd_t2 and postLiquidity < usd_t2){ _subScore(k, 20) };
-                        if (preLiquidity >= usd_t3 and postLiquidity < usd_t3){ _subScore(k, 30) };
+                        let vol = liquidity2.vol.value1 * _getPrice(v.pair.token1.0);
+                        let liquidity = liquidity2.token1 * _getPrice(v.pair.token1.0);
+                        let unit: Nat = 10 ** usd_decimals;
+                        _setScore3(k, vol / unit, liquidity / unit);
                     }catch(e){};
                 };
             };
         };
     };
     private func _getPairResponse(_dexName: ?DexName, _lr: ?Principal, _pair: PairCanisterId) : ?PairResponse{
-        switch(Trie.get(pairs, keyp(_pair), Principal.equal)){
+        switch(Trie.get(tradingPairs, keyp(_pair), Principal.equal)){
             case(?(v)){
-                if (Option.isNull(_dexName) or v.0.dexName == Option.get(_dexName, "")){
+                if (Option.isNull(_dexName) or v.pair.dexName == Option.get(_dexName, "")){
                     var liquidity : ?ICDex.Liquidity2 = null;
                     var sponsored : Bool = false;
                     var lrs : [(ListingReferrer, Time.Time, ERC721.TokenIdentifier)] = [];
@@ -792,7 +876,9 @@ shared(installMsg) actor class DexAggregator() = this {
                             lrs := item.1;
                             switch(_lr){
                                 case(?(lr)){ 
-                                    if (Option.isNull(Array.find(lrs, func (a:(ListingReferrer, Time.Time, ERC721.TokenIdentifier)): Bool{ a.0.referrer == lr }))){ return null; }
+                                    if (Option.isNull(Array.find(lrs, func (a:(ListingReferrer, Time.Time, ERC721.TokenIdentifier)): Bool{ a.0.referrer == lr }))){ 
+                                        return null; 
+                                    }
                                 };
                                 case(_){};
                             };
@@ -800,8 +886,9 @@ shared(installMsg) actor class DexAggregator() = this {
                         case(_){ };
                     };
                     return ?{
-                        pair = v.0; 
-                        score = v.1; 
+                        pair = v.pair; 
+                        score = v.score1 + v.score2 + v.score3; 
+                        createdTime = v.createdTime;
                         liquidity = liquidity; 
                         sponsored = sponsored; 
                         listingReferrers = lrs;
@@ -900,7 +987,7 @@ shared(installMsg) actor class DexAggregator() = this {
         var trie : Trie.Trie<PairCanisterId, PairResponse> = Trie.empty();
         let page = Option.get(_page, 1);
         let size = Option.get(_size, 100);
-        trie := Trie.mapFilter(pairs, func (k:PairCanisterId, v:(SwapPair, Nat)): ?PairResponse { 
+        trie := Trie.mapFilter(tradingPairs, func (k:PairCanisterId, v:TradingPair): ?PairResponse { 
             return _getPairResponse(_dexName, _lr, k); 
         });
         return trieItems(trie, page, size);
@@ -1337,9 +1424,10 @@ shared(installMsg) actor class DexAggregator() = this {
         let page = Option.get(_page, 1);
         let size = Option.get(_size, 100);
         trie := Trie.mapFilter(dexCompetitions, func (k:Nat, v:DexCompetition): ?DexCompetitionResponse { 
-            let pairList: [(DexName, SwapPair, {#token0;#token1})] = Array.mapFilter<(DexName, Principal, {#token0;#token1}),(DexName, SwapPair, {#token0;#token1})>(v.pairs, func (t: (DexName, Principal, {#token0;#token1})): ?(DexName, SwapPair, {#token0;#token1}){
-                switch(Trie.get(pairs, keyp(t.1), Principal.equal)){
-                    case(?(swapPair,score)){ ?(t.0, swapPair, t.2) };
+            let pairList: [(DexName, PairInfo, {#token0;#token1})] = 
+            Array.mapFilter<(DexName, Principal, {#token0;#token1}),(DexName, PairInfo, {#token0;#token1})>(v.pairs, func (t: (DexName, Principal, {#token0;#token1})): ?(DexName, PairInfo, {#token0;#token1}){
+                switch(Trie.get(tradingPairs, keyp(t.1), Principal.equal)){
+                    case(?(pair)){ ?(t.0, pair.pair, t.2) };
                     case(_){ null };
                 };
             });
@@ -1357,9 +1445,9 @@ shared(installMsg) actor class DexAggregator() = this {
     public query func getDexCompetition(_round: Nat) : async ?DexCompetitionResponse{
         switch(Trie.get(dexCompetitions, keyn(_round), Nat.equal)){
             case(?v){
-                let pairList: [(DexName, SwapPair, {#token0;#token1})] = Array.mapFilter<(DexName, Principal, {#token0;#token1}),(DexName, SwapPair, {#token0;#token1})>(v.pairs, func (t: (DexName, Principal, {#token0;#token1})): ?(DexName, SwapPair, {#token0;#token1}){
-                    switch(Trie.get(pairs, keyp(t.1), Principal.equal)){
-                        case(?(swapPair,score)){ ?(t.0, swapPair, t.2) };
+                let pairList: [(DexName, PairInfo, {#token0;#token1})] = Array.mapFilter<(DexName, Principal, {#token0;#token1}),(DexName, PairInfo, {#token0;#token1})>(v.pairs, func (t: (DexName, Principal, {#token0;#token1})): ?(DexName, PairInfo, {#token0;#token1}){
+                    switch(Trie.get(tradingPairs, keyp(t.1), Principal.equal)){
+                        case(?(pair)){ ?(t.0, pair.pair, t.2) };
                         case(_){ null };
                     };
                 });
@@ -1387,9 +1475,9 @@ shared(installMsg) actor class DexAggregator() = this {
                 traders := Trie.mapFilter(data, func (k:AccountId, v:[TraderData]): ?[TraderDataResponse] { 
                     return ?Array.mapFilter<TraderData, TraderDataResponse>(v, 
                         func (t: TraderData): ?TraderDataResponse{
-                            switch(Trie.get(pairs, keyp(t.pair), Principal.equal)){
-                                case(?(swapPair,score)){ ?{
-                                    pair = swapPair;
+                            switch(Trie.get(tradingPairs, keyp(t.pair), Principal.equal)){
+                                case(?(pair)){ ?{
+                                    pair = pair.pair;
                                     quoteToken = t.quoteToken;
                                     startTime = t.startTime;
                                     endTime = t.endTime;
@@ -1781,17 +1869,17 @@ shared(installMsg) actor class DexAggregator() = this {
     /// DRC207 support
     public query func drc207() : async DRC207.DRC207Support{
         return {
-            monitorable_by_self = true;
-            monitorable_by_blackhole = { allowed = true; canister_id = ?Principal.fromText("7hdtw-jqaaa-aaaak-aaccq-cai"); };
+            monitorable_by_self = false;
+            monitorable_by_blackhole = { allowed = true; canister_id = ?setting.BLACKHOLE; };
             cycles_receivable = true;
             timer = { enable = false; interval_seconds = ?(4*3600); }; 
         };
     };
-    /// canister_status
-    public func canister_status() : async DRC207.canister_status {
-        let ic : DRC207.IC = actor("aaaaa-aa");
-        await ic.canister_status({ canister_id = Principal.fromActor(this) });
-    };
+    // /// canister_status
+    // public func canister_status() : async DRC207.canister_status {
+    //     let ic : DRC207.IC = actor("aaaaa-aa");
+    //     await ic.canister_status({ canister_id = Principal.fromActor(this) });
+    // };
     /// receive cycles
     public func wallet_receive(): async (){
         let amout = Cycles.available();
@@ -1850,6 +1938,23 @@ shared(installMsg) actor class DexAggregator() = this {
         // for ((canisterId, (pair, score)) in Trie.iter(pairs)){
         //     _autoPutMarket(pair);
         // };
+
+        if (Trie.size(tradingPairs) == 0){
+            for ((canisterId, (pair, score)) in Trie.iter(pairs)){
+                tradingPairs := Trie.put(tradingPairs, keyp(canisterId), Principal.equal, {
+                    pair = pair;
+                    marketBoard = #STAGE1;
+                    score1 = 0;
+                    score2 = 0;
+                    score3 = 0;
+                    startingOverG1 = null;
+                    startingBelowG2 = null;
+                    startingBelowG4 = null;
+                    createdTime = _now();
+                    updatedTime = _now();
+                }).0;
+            };
+        };
 
     };
 

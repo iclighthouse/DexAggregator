@@ -1,15 +1,15 @@
 {
     "canisters": {
       "DexAggregator": {
-        "main": "./dex-router/src/DexRouter.mo",
+        "main": "./src/DexAggregator.mo",
         "type": "motoko"
       },
       "DexAggregatorMain": {
-        "main": "./dex-router/src/DexRouter.mo",
+        "main": "./src/DexAggregator.mo",
         "type": "motoko"
       },
       "DexAggregatorTest": {
-        "main": "./dex-router/src/DexRouter.mo",
+        "main": "./src/DexAggregator.mo",
         "type": "motoko"
       }
     },
@@ -29,6 +29,6 @@
         "type": "ephemeral"
       }
     },
-    "dfx": "0.15.0"
+    "dfx": "0.15.3"
   }
   
