@@ -6,7 +6,7 @@ import ICDex "mo:icl/ICDexTypes";
 module {
     public type Timestamp = Nat;
     public type DexName = Text;
-    public type TokenStd = DRC205.TokenStd; // #cycles token principal = CF canister
+    public type TokenStd = DRC205.TokenStd;
     public type TokenSymbol = Text;
     public type TokenInfo = (Principal, TokenSymbol, TokenStd);
     public type ListingReferrer = {
