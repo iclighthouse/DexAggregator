@@ -92,10 +92,10 @@ shared(installMsg) actor class DexAggregator() = this {
         ORACLE: Principal = Principal.fromText("pncff-zqaaa-aaaai-qnp3a-cai");
         SCORE_G1: Nat = 60; // 60
         SCORE_G2: Nat = 50; // 50
-        SCORE_G3: Nat = 30; // 30
+        SCORE_G3: Nat = 25; // 25
         SCORE_G4: Nat = 20; // 20
     };
-    private let version_: Text = "0.8.6";
+    private let version_: Text = "0.8.7";
     private let ic: IC.Self = actor("aaaaa-aa");
     private let usd_decimals: Nat = 18;
     private let icp_: Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
@@ -843,11 +843,11 @@ shared(installMsg) actor class DexAggregator() = this {
             var enUpdate : Bool = false;
             switch(Trie.get(pairLiquidity2, keyp(k), Principal.equal)){
                 case(?(liquidity)){
-                    if (Time.now() > liquidity.1 + 3600 * 1000000000){ enUpdate := true; };
+                    if (Time.now() > liquidity.1 + 4 * 3600 * 1000000000){ enUpdate := true; };
                 };
                 case(_){ enUpdate := true; };
             };
-            if (enUpdate and i < 50){
+            if (enUpdate and i < 200){
                 i += 1;
                 if (v.pair.dexName == "cyclesfinance" or v.pair.dexName == "icswap" or v.pair.dexName == "icdex"){
                     let mkt: ICDex.Self = actor(Principal.toText(k));
@@ -1900,22 +1900,29 @@ shared(installMsg) actor class DexAggregator() = this {
     ====================== */
     private var competitionTimerId: Nat = 0;
     private var competitionTimerInterval: Nat = 4*3600; // seconds  /* debug */
-    private func timerTask() : async (){
+    private func competitionTask() : async (){
         let now: Nat = Int.abs(Time.now() / 1000000000);
         let tid: Nat = now / competitionTimerInterval;
         await* _fetchDexCompetitionData(null);
-        competitionTimerId := Timer.setTimer(#seconds((tid+1)*competitionTimerInterval - now + 1), timerTask);
+        competitionTimerId := Timer.setTimer(#seconds((tid+1)*competitionTimerInterval - now + 1), competitionTask);
     };
     
     private var timerId: Nat = 0;
+    private var isTimerDoing: Bool = false;
+    private var lastTimerExcuting: Timestamp = 0;
     private func timerLoop() : async (){
-        if (competitionTimerId == 0){
-            let now: Nat = Int.abs(Time.now() / 1000000000);
-            let tid: Nat = now / competitionTimerInterval;
-            competitionTimerId := Timer.setTimer(#seconds((tid+1)*competitionTimerInterval - now + 1), timerTask);
+        if (not(isTimerDoing) or _now() > lastTimerExcuting + 12 * 3600){
+            isTimerDoing := true;
+            lastTimerExcuting := _now();
+            if (competitionTimerId == 0){
+                let now: Nat = Int.abs(Time.now() / 1000000000);
+                let tid: Nat = now / competitionTimerInterval;
+                competitionTimerId := Timer.setTimer(#seconds((tid+1)*competitionTimerInterval - now + 1), competitionTask);
+            };
+            try{ await* _fetchOracleFeed() }catch(e){};
+            try{ await* _updateLiquidity() }catch(e){};
+            isTimerDoing := false;
         };
-        try{ await* _fetchOracleFeed() }catch(e){};
-        try{ await* _updateLiquidity() }catch(e){};
     };
     public shared(msg) func timerStart(_intervalSeconds: Nat): async (){
         assert(_onlyOwner(msg.caller));
@@ -1935,10 +1942,10 @@ shared(installMsg) actor class DexAggregator() = this {
         Timer.cancelTimer(competitionTimerId);
     };
     system func postupgrade() {
-        timerId := Timer.recurringTimer(#seconds(3600), timerLoop);
+        timerId := Timer.recurringTimer(#seconds(600), timerLoop);
         let now: Nat = Int.abs(Time.now() / 1000000000);
         let tid: Nat = now / competitionTimerInterval;
-        competitionTimerId := Timer.setTimer(#seconds((tid+1)*competitionTimerInterval - now + 1), timerTask);
+        competitionTimerId := Timer.setTimer(#seconds((tid+1)*competitionTimerInterval - now + 1), competitionTask);
 
         // for ((canisterId, (pair, score)) in Trie.iter(pairs)){
         //     _autoPutMarket(pair);
