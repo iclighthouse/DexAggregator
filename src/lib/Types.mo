@@ -47,6 +47,7 @@ module {
         pair: PairInfo; 
         score: Nat; 
         createdTime: Timestamp;
+        marketBoard: ?MarketBoard;
         liquidity: ?ICDex.Liquidity2; 
         sponsored: Bool; 
         listingReferrers: [(ListingReferrer, Time.Time, Text)];

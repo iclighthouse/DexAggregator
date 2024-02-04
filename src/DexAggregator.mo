@@ -893,6 +893,7 @@ shared(installMsg) actor class DexAggregator() = this {
                         pair = v.pair; 
                         score = v.score1 + v.score2 + v.score3; 
                         createdTime = v.createdTime;
+                        marketBoard = ?v.marketBoard;
                         liquidity = liquidity; 
                         sponsored = sponsored; 
                         listingReferrers = lrs;
