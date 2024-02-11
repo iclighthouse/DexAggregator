@@ -727,8 +727,7 @@ shared(installMsg) actor class DexAggregator() = this {
         deControllers := Array.filter(deControllers, func (t: Principal): Bool{ t != _deController });
         return deControllers;
     };
-    /// Add the metadatas for the token, recommended items include,
-    /// - name: "ControlledByDAO", value: "7hdtw-...-cai" (Public DAOs such as SNS, or public wrapping canister, or black hole canister, or no controller)
+    /// Add the metadatas for the token, recommended items include
     /// - name: "ModuleHash", value: "56e9ed91d20aafd24d6389325b4a11af13934f30beb9d23c5dda9bc6a06fd87e" (Token canister module hash)
     /// - name: "Mintable", value: "no" (no/yes)
     /// - name: "MaxSupply", value: "1000000000000000" (Maximum supply of token)
