@@ -18,19 +18,19 @@ Pair scoring rule (pair_score = score1 + score2 + score3)
 Upgrade rules
 
 - A new trading pair defaults to STAGE0.
-- Upgrade from STAGE0 to STAGE1: pair_score >= 25.
+- Upgrade from STAGE0 to STAGE1: pair_score >= 20.
 - Upgrade from STAGE1 to STAGE2: pair_score >= 60, for at least one month.
 
 Degrade rules
 
 - Degrade from STAGE2 to STAGE1: pair_score < 50, for at least three months.
-- Degrade from STAGE1 to STAGE0: pair_score < 20, for at least three months.
+- Degrade from STAGE1 to STAGE0: pair_score < 15, for at least three months.
 
 Display of trading pairs in DEX UI
 
 - STAGE0 implies too much unknown risk and it is not recommended to show a list of STAGE0 pairs.
-- STAGE1 means that some traders are concerned and need to keep watching the risk.
-- STAGE2 means that more traders are concerned and need to keep watching the risk.
+- STAGE1 implies that some traders are concerned and need to keep watching the risk.
+- STAGE2 implies that more traders are concerned and need to keep watching the risk.
 
 ## Canisters
 
