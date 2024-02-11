@@ -95,7 +95,7 @@ shared(installMsg) actor class DexAggregator() = this {
         SCORE_G3: Nat = 25; // 25
         SCORE_G4: Nat = 20; // 20
     };
-    private let version_: Text = "0.8.7";
+    private let version_: Text = "0.8.8";
     private let ic: IC.Self = actor("aaaaa-aa");
     private let usd_decimals: Nat = 18;
     private let icp_: Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
@@ -120,7 +120,8 @@ shared(installMsg) actor class DexAggregator() = this {
     private stable var wasm: [Nat8] = [];
     private stable var wasmVersion: Text = "";
     
-    //private stable var tokens: Trie.Trie<Principal, [PairInfo]> = Trie.empty(); // **
+    private stable var deControllers: [Principal] = [];
+    private stable var tokenMetadatas: Trie.Trie<Principal, [(name: Text, value: Text)]> = Trie.empty(); 
     private stable var currencies =  List.nil<TokenInfo>(); 
     private stable var index: Nat = 0;
 
@@ -533,6 +534,16 @@ shared(installMsg) actor class DexAggregator() = this {
         };
         return 0;
     };
+    private func _getTokenMetadata(_token: Principal) : [(name: Text, value: Text)]{
+        switch(Trie.get(tokenMetadatas, keyp(_token), Principal.equal)){
+            case(?metadatas){
+                return metadatas;
+            };
+            case(_){
+                return [];
+            };
+        };
+    };
 
     /* =====================
       Pair List and Router
@@ -627,7 +638,12 @@ shared(installMsg) actor class DexAggregator() = this {
         return {data = Tools.slice(data, offset, ?end); total = length; totalPage = totalPage; };
     };
 
-
+    public query func getDeControllers() : async [Principal]{
+        return deControllers;
+    };
+    public query func getTokenMetadata(_token: Principal): async [(name: Text, value: Text)]{
+        return _getTokenMetadata(_token);
+    };
     
     /* =====================
       Admin
@@ -695,6 +711,60 @@ shared(installMsg) actor class DexAggregator() = this {
         switch(_market){
             case(?(market)){ _removePairFromMarket(market, _pairCanisterId) };
             case(_){ _removePairFromAllMarkets(_pairCanisterId) }
+        };
+    };
+    /// Add the decentralized controller (canister-id) as a whitelist of controllers of the token. If the token's controller is not in the whitelist, it means more risk.
+    /// Decentralized controllers include public DAOs such as SNS, public wrapping canister, black hole canister.
+    /// Typically, SNS governance canisters are seen as decentralized. However, if an SNS project is absolutely controlled by a certain entity, it may be considered to be removed from the whitelist.
+    public shared(msg) func addDeControllerWhitelist(_deController: Principal): async [Principal]{
+        assert(_onlyOwner(msg.caller));
+        deControllers := Array.filter(deControllers, func (t: Principal): Bool{ t != _deController });
+        deControllers := Tools.arrayAppend(deControllers, [_deController]);
+        return deControllers;
+    };
+    public shared(msg) func removeDeControllerWhitelist(_deController: Principal): async [Principal]{
+        assert(_onlyOwner(msg.caller));
+        deControllers := Array.filter(deControllers, func (t: Principal): Bool{ t != _deController });
+        return deControllers;
+    };
+    /// Add the metadatas for the token, recommended items include,
+    /// - name: "ControlledByDAO", value: "7hdtw-...-cai" (Public DAOs such as SNS, or public wrapping canister, or black hole canister, or no controller)
+    /// - name: "ModuleHash", value: "56e9ed91d20aafd24d6389325b4a11af13934f30beb9d23c5dda9bc6a06fd87e" (Token canister module hash)
+    /// - name: "Mintable", value: "no" (no/yes)
+    /// - name: "MaxSupply", value: "1000000000000000" (Maximum supply of token)
+    /// - name: "Catalog", value: "games" (Available values: blockchain, exchanges, finance, businesses, gambling, games, storage, wallet, governance, property, identity, oracles, media, social, security, insurance, energy, health, ai_vr_ar, memes, other)
+    /// - name: "Website", value: "https://xxxxxx.xx" (Official website of the project)
+    /// - name: "Social", value: "https://twitter.com/xxxxxxx" (Social account, such as X account)
+    /// - name: "Github", value: "https://github.com/xxxxxxxx" (Open source repository of the project)
+    public shared(msg) func addTokenMetadata(_token: Principal, _metadatas: [(_name: Text, _value: Text)]): async [(name: Text, value: Text)]{
+        assert(_onlyOwner(msg.caller));
+        var metadatas = _getTokenMetadata(_token);
+        for ((_name, _value) in _metadatas.vals()){
+            let name = _name; // Text.toLowercase(_name);
+            metadatas := Array.filter(metadatas, func (t: (Text, Text)): Bool{ t.0 != name });
+            metadatas := Tools.arrayAppend(metadatas, [(name, _value)]);
+        };
+        tokenMetadatas := Trie.put(tokenMetadatas, keyp(_token), Principal.equal, metadatas).0;
+        return metadatas;
+    };
+    public shared(msg) func removeTokenMetadata(_token: Principal, _name: ?Text): async [(name: Text, value: Text)]{
+        assert(_onlyOwner(msg.caller));
+        switch(_name){
+            case(?nameTxt){
+                var metadatas = _getTokenMetadata(_token);
+                let name = nameTxt; // Text.toLowercase(nameTxt);
+                metadatas := Array.filter(metadatas, func (t: (Text, Text)): Bool{ t.0 != name });
+                if (metadatas.size() > 0){
+                    tokenMetadatas := Trie.put(tokenMetadatas, keyp(_token), Principal.equal, metadatas).0;
+                }else{
+                    tokenMetadatas := Trie.remove(tokenMetadatas, keyp(_token), Principal.equal).0;
+                };
+                return metadatas;
+            };
+            case(_){
+                tokenMetadatas := Trie.remove(tokenMetadatas, keyp(_token), Principal.equal).0;
+                return [];
+            };
         };
     };
 
