@@ -120,7 +120,7 @@ shared(installMsg) actor class DexAggregator() = this {
     private stable var wasm: [Nat8] = [];
     private stable var wasmVersion: Text = "";
     
-    private stable var deControllers: [Principal] = [];
+    // private stable var deControllers: [Principal] = [];
     private stable var tokenMetadatas: Trie.Trie<Principal, [(name: Text, value: Text)]> = Trie.empty(); 
     private stable var currencies =  List.nil<TokenInfo>(); 
     private stable var index: Nat = 0;
@@ -638,9 +638,9 @@ shared(installMsg) actor class DexAggregator() = this {
         return {data = Tools.slice(data, offset, ?end); total = length; totalPage = totalPage; };
     };
 
-    public query func getDeControllers() : async [Principal]{
-        return deControllers;
-    };
+    // public query func getDeControllers() : async [Principal]{
+    //     return deControllers;
+    // };
     public query func getTokenMetadata(_token: Principal): async [(name: Text, value: Text)]{
         return _getTokenMetadata(_token);
     };
@@ -716,18 +716,20 @@ shared(installMsg) actor class DexAggregator() = this {
     /// Add the decentralized controller (canister-id) as a whitelist of controllers of the token. If the token's controller is not in the whitelist, it means more risk.
     /// Decentralized controllers include public DAOs such as SNS, public wrapping canister, black hole canister.
     /// Typically, SNS governance canisters are seen as decentralized. However, if an SNS project is absolutely controlled by a certain entity, it may be considered to be removed from the whitelist.
-    public shared(msg) func addDeControllerWhitelist(_deController: Principal): async [Principal]{
-        assert(_onlyOwner(msg.caller));
-        deControllers := Array.filter(deControllers, func (t: Principal): Bool{ t != _deController });
-        deControllers := Tools.arrayAppend(deControllers, [_deController]);
-        return deControllers;
-    };
-    public shared(msg) func removeDeControllerWhitelist(_deController: Principal): async [Principal]{
-        assert(_onlyOwner(msg.caller));
-        deControllers := Array.filter(deControllers, func (t: Principal): Bool{ t != _deController });
-        return deControllers;
-    };
-    /// Add the metadatas for the token, recommended items include
+    // public shared(msg) func addDeControllerWhitelist(_deController: Principal): async [Principal]{
+    //     assert(_onlyOwner(msg.caller));
+    //     deControllers := Array.filter(deControllers, func (t: Principal): Bool{ t != _deController });
+    //     deControllers := Tools.arrayAppend(deControllers, [_deController]);
+    //     return deControllers;
+    // };
+    // public shared(msg) func removeDeControllerWhitelist(_deController: Principal): async [Principal]{
+    //     assert(_onlyOwner(msg.caller));
+    //     deControllers := Array.filter(deControllers, func (t: Principal): Bool{ t != _deController });
+    //     return deControllers;
+    // };
+
+    /// Add the metadatas for the token, recommended items include,
+    /// - name: "ControlledByDAO", value: "7hdtw-...-cai" (Public DAOs such as SNS, or public wrapping canister, or black hole canister, or no controller)
     /// - name: "ModuleHash", value: "56e9ed91d20aafd24d6389325b4a11af13934f30beb9d23c5dda9bc6a06fd87e" (Token canister module hash)
     /// - name: "Mintable", value: "no" (no/yes)
     /// - name: "MaxSupply", value: "1000000000000000" (Maximum supply of token)
