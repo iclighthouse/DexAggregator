@@ -99,7 +99,7 @@ shared(installMsg) actor class DexAggregator() = this {
         DAO: Principal = Principal.fromText("hodlf-miaaa-aaaaq-aackq-cai");
         DAO_BOARD: Principal = Principal.fromText("hodlf-miaaa-aaaaq-aackq-cai");
     };
-    private let version_: Text = "0.8.8";
+    private let version_: Text = "0.8.9";
     private let ic: IC.Self = actor("aaaaa-aa");
     private let usd_decimals: Nat = 18;
     private let icp_: Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
