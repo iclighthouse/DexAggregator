@@ -95,6 +95,10 @@ shared(installMsg) actor class DexAggregator() = this {
         SCORE_G3: Nat = 25; // 25
         SCORE_G4: Nat = 20; // 20
     };
+    private stable var dao = {
+        DAO: Principal = Principal.fromText("hodlf-miaaa-aaaaq-aackq-cai");
+        DAO_BOARD: Principal = Principal.fromText("hodlf-miaaa-aaaaq-aackq-cai");
+    };
     private let version_: Text = "0.8.8";
     private let ic: IC.Self = actor("aaaaa-aa");
     private let usd_decimals: Nat = 18;
@@ -102,7 +106,7 @@ shared(installMsg) actor class DexAggregator() = this {
     private stable var oracleData: ([ICOracle.DataResponse], Timestamp) = ([], 0); // ICP/USD sid=2
     // private stable var pause: Bool = false; 
     // private stable var owner: Principal = installMsg.caller;
-    private stable var sysToken: ICRC1.Self = actor(Principal.toText(setting.SYS_TOKEN));
+    // private stable var sysToken: ICRC1.Self = actor(Principal.toText(setting.SYS_TOKEN));
     private stable var lastMonitorTime: Time.Time = 0;
     private stable var dexList =  List.nil<(DexName, Principal)>(); 
     private stable var pairs: Trie.Trie<PairCanisterId, (pair: PairInfo, score: Nat)> = Trie.empty(); // deprecated
@@ -156,7 +160,7 @@ shared(installMsg) actor class DexAggregator() = this {
     * Local Functions
     */
     private func _onlyOwner(_caller: Principal) : Bool { 
-        return Principal.isController(_caller);
+        return Principal.isController(_caller) or _caller == dao.DAO or _caller == dao.DAO_BOARD;
     };  // assert(_onlyOwner(msg.caller));
     // private func _notPaused() : Bool { 
     //     return not(pause);
@@ -775,7 +779,10 @@ shared(installMsg) actor class DexAggregator() = this {
     public query func getConfig() : async T.Config{
         return setting;
     };
-    public shared(msg) func config(config: T.ConfigRequest) : async Bool{ 
+    public query func getDAO() : async {DAO: Principal; DAO_BOARD: Principal}{
+        return dao;
+    };
+    public shared(msg) func config(config: T.ConfigRequest, DAO: ?Principal, DAO_BOARD: ?Principal) : async Bool{ 
         assert(_onlyOwner(msg.caller));
         setting := {
             SYS_TOKEN: Principal = Option.get(config.SYS_TOKEN, setting.SYS_TOKEN);
@@ -785,6 +792,10 @@ shared(installMsg) actor class DexAggregator() = this {
             SCORE_G2: Nat = Option.get(config.SCORE_G2, setting.SCORE_G2);
             SCORE_G3: Nat = Option.get(config.SCORE_G3, setting.SCORE_G3);
             SCORE_G4: Nat = Option.get(config.SCORE_G4, setting.SCORE_G4);
+        };
+        dao := {
+            DAO: Principal = Option.get(DAO, dao.DAO);
+            DAO_BOARD: Principal = Option.get(DAO_BOARD, dao.DAO_BOARD);
         };
         return true;
     };
@@ -1798,23 +1809,25 @@ shared(installMsg) actor class DexAggregator() = this {
         switch(Trie.get(nfts, keyb(accountId), Blob.equal)){
             case(?(item)){ 
                 for(nft in item.vals()){
-                    let nftActor: ERC721.Self = actor(Principal.toText(nft.4));
-                    let args: ERC721.TransferRequest = {
-                        from = #principal(Principal.fromActor(this));
-                        to = nft.0;
-                        token = nft.1;
-                        amount = nft.2;
-                        memo = Blob.fromArray([]);
-                        notify = false;
-                        subaccount = null;
-                    };
-                    switch(await nftActor.transfer(args)){
-                        case(#ok(balance)){
-                            _NFTRemove(accountId, nft.1);
-                            // Hooks used to unbind all
-                            _dropListingReferrer(_caller);
+                    if (_nftId == null or _nftId == ?nft.1){
+                        let nftActor: ERC721.Self = actor(Principal.toText(nft.4));
+                        let args: ERC721.TransferRequest = {
+                            from = #principal(Principal.fromActor(this));
+                            to = nft.0;
+                            token = nft.1;
+                            amount = nft.2;
+                            memo = Blob.fromArray([]);
+                            notify = false;
+                            subaccount = null;
                         };
-                        case(#err(e)){};
+                        switch(await nftActor.transfer(args)){
+                            case(#ok(balance)){
+                                _NFTRemove(accountId, nft.1);
+                                // Hooks used to unbind all
+                                _dropListingReferrer(_caller);
+                            };
+                            case(#err(e)){};
+                        };
                     };
                 };
              };
