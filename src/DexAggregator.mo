@@ -92,8 +92,8 @@ shared(installMsg) actor class DexAggregator() = this {
         ORACLE: Principal = Principal.fromText("pncff-zqaaa-aaaai-qnp3a-cai");
         SCORE_G1: Nat = 60; // 60
         SCORE_G2: Nat = 50; // 50
-        SCORE_G3: Nat = 25; // 25
-        SCORE_G4: Nat = 20; // 20
+        SCORE_G3: Nat = 20; // 25
+        SCORE_G4: Nat = 15; // 20
     };
     private stable var dao = {
         DAO: Principal = Principal.fromText("hodlf-miaaa-aaaaq-aackq-cai");
