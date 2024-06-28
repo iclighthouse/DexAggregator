@@ -99,7 +99,7 @@ shared(installMsg) actor class DexAggregator() = this {
         DAO: Principal = Principal.fromText("hodlf-miaaa-aaaaq-aackq-cai");
         DAO_BOARD: Principal = Principal.fromText("hodlf-miaaa-aaaaq-aackq-cai");
     };
-    private let version_: Text = "0.8.9";
+    private let version_: Text = "0.8.10";
     private let ic: IC.Self = actor("aaaaa-aa");
     private let usd_decimals: Nat = 18;
     private let icp_: Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
@@ -848,6 +848,11 @@ shared(installMsg) actor class DexAggregator() = this {
         let res = await token.icrc1_transfer(args);
     };
 
+    public shared(msg) func debug_updateLiquidity() : async (){
+        assert(_onlyOwner(msg.caller));
+        await* _updateLiquidity(true);
+    };
+
     /* =====================
       Listing Referrer
     ====================== */
@@ -919,7 +924,7 @@ shared(installMsg) actor class DexAggregator() = this {
             };
         };
     };
-    private func _updateLiquidity() : async* (){
+    private func _updateLiquidity(_debug: Bool) : async* (){
         var i : Nat = 0;
         for ((k,v) in Trie.iter(tradingPairs)){
             var enUpdate : Bool = false;
@@ -940,7 +945,11 @@ shared(installMsg) actor class DexAggregator() = this {
                         let liquidity = liquidity2.token1 * _getPrice(v.pair.token1.0);
                         let unit: Nat = 10 ** usd_decimals;
                         _setScore3(k, vol / unit, liquidity / unit);
-                    }catch(e){};
+                    }catch(e){
+                        if (_debug){
+                            throw e;
+                        };
+                    };
                 };
             };
         };
@@ -1078,6 +1087,12 @@ shared(installMsg) actor class DexAggregator() = this {
             return _getPairResponse(_dexName, _lr, k); 
         });
         return trieItems(trie, page, size);
+    };
+
+    public query func debugPairs() : async [{pair: Principal; dev: Principal}]{
+        return [
+            //
+        ];
     };
 
     /* =====================
@@ -2004,7 +2019,7 @@ shared(installMsg) actor class DexAggregator() = this {
                 competitionTimerId := Timer.setTimer(#seconds((tid+1)*competitionTimerInterval - now + 1), competitionTask);
             };
             try{ await* _fetchOracleFeed() }catch(e){};
-            try{ await* _updateLiquidity() }catch(e){};
+            try{ await* _updateLiquidity(false) }catch(e){};
             isTimerDoing := false;
         };
     };
